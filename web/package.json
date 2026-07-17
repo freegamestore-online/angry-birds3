@@ -1,5 +1,5 @@
 {
-  "name": "@APPNAME/web",
+  "name": "@angry-birds3/web",
   "private": true,
   "type": "module",
   "scripts": {

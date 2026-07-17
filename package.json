@@ -1,13 +1,13 @@
 {
-  "name": "APPNAME",
+  "name": "angry-birds3",
   "private": true,
   "packageManager": "pnpm@10.30.3",
   "engines": { "node": ">=22" },
   "pnpm": { "onlyBuiltDependencies": ["esbuild"] },
   "scripts": {
-    "dev": "pnpm --filter @APPNAME/web dev",
-    "build": "pnpm --filter @APPNAME/web build",
-    "preview": "pnpm --filter @APPNAME/web preview",
-    "typecheck": "pnpm --filter @APPNAME/web exec tsc -b"
+    "dev": "pnpm --filter @angry-birds3/web dev",
+    "build": "pnpm --filter @angry-birds3/web build",
+    "preview": "pnpm --filter @angry-birds3/web preview",
+    "typecheck": "pnpm --filter @angry-birds3/web exec tsc -b"
   }
 }
