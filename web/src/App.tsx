@@ -38,9 +38,8 @@ interface LevelDef {
   pigs:  { cx: number; cy: number }[];
 }
 
-// Ground at 80% height. Sling at ~18% width.
-// Structures on right side (0.55–0.90 cx).
-// cy is fraction from top; ground top = 0.80, so cy=0.76 sits just above ground.
+// Ground at 82% height. Sling at ~18% width, ~68% height (well above ground).
+// cy is fraction from top; 0.78 = just above ground.
 const LEVELS: LevelDef[] = [
   {
     birds: ["red", "red"],
@@ -98,7 +97,7 @@ const LEVELS: LevelDef[] = [
 // ─── Physics ──────────────────────────────────────────────────────────────────
 const GRAVITY    = 1100;
 const LAUNCH_POW = 11;
-const MAX_DRAG   = 75;
+const MAX_DRAG   = 80;
 const BIRD_R     = 16;
 const PIG_R      = 14;
 
@@ -180,6 +179,35 @@ function step(bodies: Body[], groundY: number, dtMs: number) {
   for (const b of bodies) if (b.hp <= 0) b.alive = false;
 }
 
+// ─── Clamp drag position ──────────────────────────────────────────────────────
+// The bird can only be pulled LEFT and/or UP from the sling pivot.
+// This prevents dragging right (which would fire backwards) or far below ground.
+function clampDrag(
+  rawX: number, rawY: number,
+  pivotX: number, pivotY: number,
+  groundY: number
+): { x: number; y: number } {
+  let dx = rawX - pivotX;
+  let dy = rawY - pivotY;
+
+  // Don't allow dragging to the right of the pivot (bird would go backward)
+  if (dx > 0) dx = 0;
+
+  // Don't allow dragging below the ground line
+  const maxDy = groundY - pivotY - BIRD_R;
+  if (dy > maxDy) dy = maxDy;
+
+  // Clamp to max drag radius
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  if (dist > MAX_DRAG) {
+    const scale = MAX_DRAG / dist;
+    dx *= scale;
+    dy *= scale;
+  }
+
+  return { x: pivotX + dx, y: pivotY + dy };
+}
+
 // ─── Game state ───────────────────────────────────────────────────────────────
 interface GS {
   phase: Phase;
@@ -234,8 +262,9 @@ export default function App() {
 
     const queue = [...def.birds];
     const firstType = queue.shift()!;
+    // Sling pivot: 18% across, 65% down — well above ground (ground=82%)
     const _sx = W * 0.18;
-    const _sy = H * 0.80 - 28;
+    const _sy = H * 0.65;
 
     const bird = mkBody({
       kind: "bird",
@@ -275,16 +304,18 @@ export default function App() {
       if (dead) { app.destroy(true); return; }
       container.appendChild(app.canvas);
 
-      // Make the canvas fill the container
       app.canvas.style.display = "block";
       app.canvas.style.width   = "100%";
       app.canvas.style.height  = "100%";
 
-      const W = () => app.screen.width;
-      const H = () => app.screen.height;
-      const gY  = () => H() * 0.80;
+      const W  = () => app.screen.width;
+      const H  = () => app.screen.height;
+      const gY = () => H() * 0.82;          // ground line at 82%
+      // Sling pivot — the fork tips where rubber bands attach
       const slX = () => W() * 0.18;
-      const slY = () => gY() - 28;
+      const slY = () => H() * 0.65;         // raised: ~65% down (was ~78%)
+      // Sling base (bottom of post)
+      const slBaseY = () => gY();
 
       // ── Graphics layers ──────────────────────────────────────────────
       const bgGfx      = new Graphics();
@@ -331,10 +362,8 @@ export default function App() {
       // ── Draw helpers ─────────────────────────────────────────────────
       function drawBg() {
         bgGfx.clear();
-        // Sky gradient approximation
         bgGfx.rect(0, 0, W(), gY() * 0.5).fill(0x5bb8f5);
         bgGfx.rect(0, gY() * 0.5, W(), gY() * 0.5).fill(0x87ceeb);
-        // Clouds
         const clouds: [number, number, number][] = [
           [0.12, 0.10, 26], [0.32, 0.07, 20], [0.52, 0.13, 28],
           [0.70, 0.08, 22], [0.87, 0.11, 18],
@@ -349,11 +378,8 @@ export default function App() {
       function drawGround() {
         groundGfx.clear();
         const gy = gY();
-        // Grass strip
         groundGfx.rect(0, gy, W(), H() * 0.04).fill(0x5a8a30);
-        // Dirt
         groundGfx.rect(0, gy + H() * 0.04, W(), H() - gy - H() * 0.04).fill(0x8b6914);
-        // Grass tufts
         for (let i = 0; i < 28; i++) {
           const tx = (i / 28) * W();
           groundGfx.rect(tx,     gy - 3, 3, 7).fill(0x3d7a1a);
@@ -364,12 +390,9 @@ export default function App() {
       function drawBirdShape(g: Graphics, bx: number, by: number, r: number, col: number) {
         g.circle(bx, by, r).fill(col);
         const s = r / BIRD_R;
-        // Eye
         g.circle(bx + 7 * s, by - 5 * s, 5 * s).fill(0xffffff);
         g.circle(bx + 8 * s, by - 5 * s, 2.5 * s).fill(0x111111);
-        // Beak
         g.poly([bx + 12 * s, by - 2 * s, bx + 19 * s, by, bx + 12 * s, by + 3 * s]).fill(0xffa500);
-        // Tuft
         g.poly([bx - 3 * s, by - r, bx, by - r - 8 * s, bx + 3 * s, by - r]).fill(col);
       }
 
@@ -377,25 +400,28 @@ export default function App() {
         slingGfx.clear();
         const _gs = gsRef.current;
         if (!_gs) return;
-        const _sx = slX(), _sy = slY(), _gy = gY();
+        const _sx = slX(), _sy = slY(), _gy = slBaseY();
 
-        // Sling base post
-        slingGfx.rect(_sx - 4, _sy - 5, 8, _gy - _sy + 5).fill(0x8b4513);
-        // Fork arms
-        slingGfx.moveTo(_sx, _sy - 5).lineTo(_sx - 10, _sy - 24)
-          .stroke({ color: 0x8b4513, width: 7, cap: "round" });
-        slingGfx.moveTo(_sx, _sy - 5).lineTo(_sx + 10, _sy - 24)
-          .stroke({ color: 0x8b4513, width: 7, cap: "round" });
+        // Vertical post
+        slingGfx.rect(_sx - 4, _sy + 10, 8, _gy - _sy - 10).fill(0x8b4513);
+
+        // Fork arms (Y-shape tips above pivot)
+        slingGfx.moveTo(_sx, _sy + 10)
+          .lineTo(_sx - 12, _sy - 18)
+          .stroke({ color: 0x8b4513, width: 8, cap: "round" });
+        slingGfx.moveTo(_sx, _sy + 10)
+          .lineTo(_sx + 12, _sy - 18)
+          .stroke({ color: 0x8b4513, width: 8, cap: "round" });
 
         if (_gs.phase !== "aim") return;
 
         const bx = _gs.dragging ? _gs.dragX : _sx;
         const by = _gs.dragging ? _gs.dragY : _sy;
 
-        // Rubber bands
-        slingGfx.moveTo(_sx - 10, _sy - 24).lineTo(bx, by)
+        // Rubber bands from fork tips to bird
+        slingGfx.moveTo(_sx - 12, _sy - 18).lineTo(bx, by)
           .stroke({ color: 0x6b3a10, width: 3 });
-        slingGfx.moveTo(_sx + 10, _sy - 24).lineTo(bx, by)
+        slingGfx.moveTo(_sx + 12, _sy - 18).lineTo(bx, by)
           .stroke({ color: 0x6b3a10, width: 3 });
 
         // Bird on sling
@@ -404,7 +430,7 @@ export default function App() {
           drawBirdShape(slingGfx, bx, by, BIRD_R, col);
         }
 
-        // Queued birds sitting on ground to the left
+        // Queued birds sitting on the ground to the left
         for (let i = 0; i < _gs.queue.length; i++) {
           const bt  = _gs.queue[i]!;
           const col = BIRD_COL[bt] ?? 0xe63946;
@@ -421,12 +447,12 @@ export default function App() {
         const dvy = (_sy - _gs.dragY) * LAUNCH_POW;
         let tx = _sx, ty = _sy, tvx = dvx, tvy = dvy;
         const dt = 0.05;
-        for (let i = 0; i < 24; i++) {
+        for (let i = 0; i < 28; i++) {
           tvy += GRAVITY * dt;
           tx  += tvx * dt;
           ty  += tvy * dt;
           if (ty > gY()) break;
-          trajGfx.circle(tx, ty, 3).fill({ color: 0xffffff, alpha: 1 - i / 24 });
+          trajGfx.circle(tx, ty, 3).fill({ color: 0xffffff, alpha: 1 - i / 28 });
         }
       }
 
@@ -525,26 +551,21 @@ export default function App() {
 
         const px = e.global.x, py = e.global.y;
         const ddx = px - slX(), ddy = py - slY();
-        if (Math.sqrt(ddx * ddx + ddy * ddy) < 55) {
+        // Large touch target — 70px radius around pivot
+        if (Math.sqrt(ddx * ddx + ddy * ddy) < 70) {
           _gs.dragging = true;
-          _gs.dragX = px; _gs.dragY = py;
+          const clamped = clampDrag(px, py, slX(), slY(), gY());
+          _gs.dragX = clamped.x;
+          _gs.dragY = clamped.y;
         }
       });
 
       app.stage.on("pointermove", (e) => {
         const _gs = gsRef.current;
         if (!_gs || !_gs.dragging) return;
-        const px = e.global.x, py = e.global.y;
-        const _sx = slX(), _sy = slY();
-        const ddx = px - _sx, ddy = py - _sy;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist > MAX_DRAG) {
-          const ang = Math.atan2(ddy, ddx);
-          _gs.dragX = _sx + Math.cos(ang) * MAX_DRAG;
-          _gs.dragY = _sy + Math.sin(ang) * MAX_DRAG;
-        } else {
-          _gs.dragX = px; _gs.dragY = py;
-        }
+        const clamped = clampDrag(e.global.x, e.global.y, slX(), slY(), gY());
+        _gs.dragX = clamped.x;
+        _gs.dragY = clamped.y;
       });
 
       app.stage.on("pointerup", () => {
@@ -552,11 +573,12 @@ export default function App() {
         if (!_gs || !_gs.dragging || !_gs.bird) return;
         _gs.dragging = false;
 
-        const _sx = slX(), _sy = slY();
+        const _sx  = slX(), _sy = slY();
         const ddx  = _sx - _gs.dragX;
         const ddy  = _sy - _gs.dragY;
         const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (dist < 8) return;
+        // Minimum drag of 10px to fire
+        if (dist < 10) return;
 
         const b = _gs.bird;
         b.x = _gs.dragX;
@@ -632,7 +654,7 @@ export default function App() {
             }
           }
 
-          // Score killed pigs
+          // Score killed pigs (mark with -9999 to avoid double-counting)
           for (const b of _gs.bodies) {
             if (b.kind === "pig" && !b.alive && b.hp > -9999) {
               _gs.score += 5000;
@@ -704,11 +726,11 @@ export default function App() {
             </div>
           </div>
           <div className="text-xs mt-2" style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
-            {uiPhase === "aim" && "Drag the bird to aim, release to fire!"}
-            {uiPhase === "flying" && "Bird in flight…"}
+            {uiPhase === "aim"      && "Drag the bird to aim, release to fire!"}
+            {uiPhase === "flying"   && "Bird in flight…"}
             {uiPhase === "settling" && "Settling…"}
-            {uiPhase === "won" && "🎉 Level complete!"}
-            {uiPhase === "lost" && "💥 Out of birds!"}
+            {uiPhase === "won"      && "🎉 Level complete!"}
+            {uiPhase === "lost"     && "💥 Out of birds!"}
           </div>
         </div>
       }
@@ -716,15 +738,14 @@ export default function App() {
         <div className="flex items-center gap-2 text-sm"
           style={{ fontFamily: "Manrope,sans-serif", color: "var(--fg)" }}>
           <span>Lv {uiLevel}</span>
-          <span style={{ color: "var(--muted)" }}>{uiScore.toLocaleString()} pts</span>
-          <span>{uiBirds.map((b) => birdEmoji[b]).join("")}</span>
+          <span style={{ color: "var(--muted)" }}>·</span>
+          <span>{uiScore.toLocaleString()}</span>
+          <span style={{ color: "var(--muted)" }}>·</span>
+          <span>{uiBirds.map(b => birdEmoji[b]).join("")}</span>
         </div>
       }
     >
-      <div
-        ref={containerRef}
-        style={{ width: "100%", height: "100%", display: "block", overflow: "hidden" }}
-      />
+      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
     </Shell>
   );
 }
