@@ -38,8 +38,6 @@ interface LevelDef {
   pigs:  { cx: number; cy: number }[];
 }
 
-// Ground at 82% height. Sling at ~18% width, ~68% height (well above ground).
-// cy is fraction from top; 0.78 = just above ground.
 const LEVELS: LevelDef[] = [
   {
     birds: ["red", "red"],
@@ -108,107 +106,74 @@ function mkBody(p: Omit<Body, "id"|"vx"|"vy"|"alive">): Body {
 
 function step(bodies: Body[], groundY: number, dtMs: number) {
   const dt = Math.min(dtMs / 1000, 0.033);
-
   for (const b of bodies) {
     if (b.isStatic || !b.alive) continue;
     b.vy += GRAVITY * dt;
     b.x  += b.vx * dt;
     b.y  += b.vy * dt;
   }
-
   for (const b of bodies) {
     if (b.isStatic || !b.alive) continue;
     const floor = groundY - b.r;
     if (b.y > floor) {
-      const impactSpd = Math.abs(b.vy);
+      const spd = Math.abs(b.vy);
       b.y   = floor;
       b.vy *= -b.rest;
       b.vx *= b.fric;
       if (Math.abs(b.vy) < 15) b.vy = 0;
-      if (impactSpd > 30) b.hp -= impactSpd * 0.1;
+      if (spd > 30) b.hp -= spd * 0.1;
     }
   }
-
   for (let i = 0; i < bodies.length; i++) {
     const a = bodies[i]!;
     if (!a.alive) continue;
     for (let j = i + 1; j < bodies.length; j++) {
       const b = bodies[j]!;
-      if (!b.alive) continue;
-      if (a.isStatic && b.isStatic) continue;
-
-      const dx   = b.x - a.x;
-      const dy   = b.y - a.y;
+      if (!b.alive || (a.isStatic && b.isStatic)) continue;
+      const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const minD = a.r + b.r;
       if (dist >= minD || dist < 0.001) continue;
-
-      const nx = dx / dist;
-      const ny = dy / dist;
-      const ov = minD - dist;
-
+      const nx = dx / dist, ny = dy / dist, ov = minD - dist;
       if (!a.isStatic && !b.isStatic) {
         a.x -= nx * ov * 0.5; a.y -= ny * ov * 0.5;
         b.x += nx * ov * 0.5; b.y += ny * ov * 0.5;
-      } else if (!a.isStatic) {
-        a.x -= nx * ov; a.y -= ny * ov;
-      } else {
-        b.x += nx * ov; b.y += ny * ov;
-      }
-
-      const rvx = b.vx - a.vx;
-      const rvy = b.vy - a.vy;
+      } else if (!a.isStatic) { a.x -= nx * ov; a.y -= ny * ov; }
+        else                  { b.x += nx * ov; b.y += ny * ov; }
+      const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
       const dot = rvx * nx + rvy * ny;
       if (dot >= 0) continue;
-
       const e   = Math.min(a.rest, b.rest);
       const imp = (-(1 + e) * dot) / (1 / a.mass + 1 / b.mass);
       const spd = Math.sqrt(rvx * rvx + rvy * rvy);
       const dmg = Math.min(spd * 0.4, 60);
-
       if (!a.isStatic) { a.vx -= (imp * nx) / a.mass; a.vy -= (imp * ny) / a.mass; }
       if (!b.isStatic) { b.vx += (imp * nx) / b.mass; b.vy += (imp * ny) / b.mass; }
-
       if (dmg > 4) {
         if (!a.isStatic) a.hp -= dmg;
         if (!b.isStatic) b.hp -= dmg;
       }
     }
   }
-
   for (const b of bodies) if (b.hp <= 0) b.alive = false;
 }
 
-// ─── Clamp drag position ──────────────────────────────────────────────────────
-// The bird can only be pulled LEFT and/or UP from the sling pivot.
-// This prevents dragging right (which would fire backwards) or far below ground.
+// Clamp drag: left of pivot only, above ground, within MAX_DRAG radius
 function clampDrag(
   rawX: number, rawY: number,
   pivotX: number, pivotY: number,
-  groundY: number
+  groundY: number,
 ): { x: number; y: number } {
   let dx = rawX - pivotX;
   let dy = rawY - pivotY;
-
-  // Don't allow dragging to the right of the pivot (bird would go backward)
   if (dx > 0) dx = 0;
-
-  // Don't allow dragging below the ground line
   const maxDy = groundY - pivotY - BIRD_R;
   if (dy > maxDy) dy = maxDy;
-
-  // Clamp to max drag radius
   const dist = Math.sqrt(dx * dx + dy * dy);
-  if (dist > MAX_DRAG) {
-    const scale = MAX_DRAG / dist;
-    dx *= scale;
-    dy *= scale;
-  }
-
+  if (dist > MAX_DRAG) { dx *= MAX_DRAG / dist; dy *= MAX_DRAG / dist; }
   return { x: pivotX + dx, y: pivotY + dy };
 }
 
-// ─── Game state ───────────────────────────────────────────────────────────────
 interface GS {
   phase: Phase;
   lvlIdx: number;
@@ -232,105 +197,68 @@ export default function App() {
   const buildLevel = useCallback((lvlIdx: number, W: number, H: number): GS => {
     const def = LEVELS[lvlIdx % LEVELS.length]!;
     const bodies: Body[] = [];
-
     for (const bl of def.blocks) {
-      const bw = bl.bw * W;
-      const bh = bl.bh * H;
+      const bw = bl.bw * W, bh = bl.bh * H;
       bodies.push(mkBody({
-        kind: "block",
-        x: bl.cx * W, y: bl.cy * H,
-        r: Math.min(bw, bh) / 2,
-        w: bw, h: bh,
-        mass: bw * bh * 0.004,
-        rest: 0.15, fric: 0.75,
-        isStatic: false,
-        hp: MAT_HP[bl.mat], maxHp: MAT_HP[bl.mat],
-        mat: bl.mat,
+        kind: "block", x: bl.cx * W, y: bl.cy * H,
+        r: Math.min(bw, bh) / 2, w: bw, h: bh,
+        mass: bw * bh * 0.004, rest: 0.15, fric: 0.75,
+        isStatic: false, hp: MAT_HP[bl.mat], maxHp: MAT_HP[bl.mat], mat: bl.mat,
       }));
     }
-
     for (const pg of def.pigs) {
       bodies.push(mkBody({
-        kind: "pig",
-        x: pg.cx * W, y: pg.cy * H,
+        kind: "pig", x: pg.cx * W, y: pg.cy * H,
         r: PIG_R, w: PIG_R * 2, h: PIG_R * 2,
         mass: 3, rest: 0.3, fric: 0.7,
-        isStatic: false,
-        hp: 60, maxHp: 60,
+        isStatic: false, hp: 60, maxHp: 60,
       }));
     }
-
     const queue = [...def.birds];
     const firstType = queue.shift()!;
-    // Sling pivot: 18% across, 65% down — well above ground (ground=82%)
-    const _sx = W * 0.18;
-    const _sy = H * 0.65;
-
+    const _sx = W * 0.18, _sy = H * 0.65;
     const bird = mkBody({
-      kind: "bird",
-      x: _sx, y: _sy,
+      kind: "bird", x: _sx, y: _sy,
       r: BIRD_R, w: BIRD_R * 2, h: BIRD_R * 2,
       mass: 2, rest: 0.35, fric: 0.6,
-      isStatic: true,
-      hp: 999, maxHp: 999,
-      birdType: firstType,
+      isStatic: true, hp: 999, maxHp: 999, birdType: firstType,
     });
-
     return {
-      phase: "aim",
-      lvlIdx,
+      phase: "aim", lvlIdx,
       score: gsRef.current?.score ?? 0,
-      queue,
-      bodies,
-      bird,
-      dragging: false,
-      dragX: _sx, dragY: _sy,
+      queue, bodies, bird,
+      dragging: false, dragX: _sx, dragY: _sy,
     };
   }, []);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
     let dead = false;
     const app = new Application();
 
     (async () => {
-      await app.init({
-        resizeTo: container,
-        background: 0x87ceeb,
-        antialias: true,
-      });
+      await app.init({ resizeTo: container, background: 0x87ceeb, antialias: true });
       if (dead) { app.destroy(true); return; }
       container.appendChild(app.canvas);
-
       app.canvas.style.display = "block";
       app.canvas.style.width   = "100%";
       app.canvas.style.height  = "100%";
 
-      const W  = () => app.screen.width;
-      const H  = () => app.screen.height;
-      const gY = () => H() * 0.82;          // ground line at 82%
-      // Sling pivot — the fork tips where rubber bands attach
-      const slX = () => W() * 0.18;
-      const slY = () => H() * 0.65;         // raised: ~65% down (was ~78%)
-      // Sling base (bottom of post)
-      const slBaseY = () => gY();
+      const W   = () => app.screen.width;
+      const H   = () => app.screen.height;
+      const gY  = () => H() * 0.82;   // ground line
+      const slX = () => W() * 0.18;   // sling x
+      const slY = () => H() * 0.65;   // sling pivot y (raised well above ground)
 
-      // ── Graphics layers ──────────────────────────────────────────────
-      const bgGfx      = new Graphics();
-      const groundGfx  = new Graphics();
-      const bodyGfx    = new Graphics();
-      const slingGfx   = new Graphics();
-      const trajGfx    = new Graphics();
-      const overlayGfx = new Graphics();
+      const bgGfx = new Graphics(), groundGfx = new Graphics(),
+            bodyGfx = new Graphics(), slingGfx = new Graphics(),
+            trajGfx = new Graphics(), overlayGfx = new Graphics();
       app.stage.addChild(bgGfx, groundGfx, bodyGfx, slingGfx, trajGfx, overlayGfx);
 
-      // ── HUD ──────────────────────────────────────────────────────────
       const hudSty = new TextStyle({
         fontFamily: "Manrope,sans-serif", fontSize: 15, fill: 0xffffff,
-        fontWeight: "700",
-        dropShadow: { color: 0x000000, blur: 3, distance: 1 },
+        fontWeight: "700", dropShadow: { color: 0x000000, blur: 3, distance: 1 },
       });
       const scoreTxt = new Text({ text: "Score: 0", style: hudSty });
       const levelTxt = new Text({ text: "Level 1", style: hudSty });
@@ -341,8 +269,7 @@ export default function App() {
       app.stage.addChild(scoreTxt, levelTxt, hsTxt);
 
       const overSty = new TextStyle({
-        fontFamily: "Fraunces,serif", fontSize: 32, fill: 0xffffff,
-        fontWeight: "700",
+        fontFamily: "Fraunces,serif", fontSize: 32, fill: 0xffffff, fontWeight: "700",
         dropShadow: { color: 0x000000, blur: 6, distance: 2 },
       });
       const subSty = new TextStyle({
@@ -351,90 +278,79 @@ export default function App() {
       });
       const overTxt = new Text({ text: "", style: overSty });
       const subTxt  = new Text({ text: "", style: subSty });
-      overTxt.anchor.set(0.5);
-      subTxt.anchor.set(0.5);
+      overTxt.anchor.set(0.5); subTxt.anchor.set(0.5);
       app.stage.addChild(overTxt, subTxt);
 
-      // ── Init ─────────────────────────────────────────────────────────
       let gs = buildLevel(0, W(), H());
       gsRef.current = gs;
 
-      // ── Draw helpers ─────────────────────────────────────────────────
       function drawBg() {
         bgGfx.clear();
         bgGfx.rect(0, 0, W(), gY() * 0.5).fill(0x5bb8f5);
         bgGfx.rect(0, gY() * 0.5, W(), gY() * 0.5).fill(0x87ceeb);
         const clouds: [number, number, number][] = [
-          [0.12, 0.10, 26], [0.32, 0.07, 20], [0.52, 0.13, 28],
-          [0.70, 0.08, 22], [0.87, 0.11, 18],
+          [0.12,0.10,26],[0.32,0.07,20],[0.52,0.13,28],[0.70,0.08,22],[0.87,0.11,18],
         ];
         for (const [cx, cy, r] of clouds) {
-          bgGfx.circle(cx * W(), cy * H(), r).fill(0xffffff);
-          bgGfx.circle(cx * W() + r * 0.8, cy * H(), r * 0.7).fill(0xffffff);
-          bgGfx.circle(cx * W() - r * 0.8, cy * H(), r * 0.7).fill(0xffffff);
+          bgGfx.circle(cx*W(), cy*H(), r).fill(0xffffff);
+          bgGfx.circle(cx*W()+r*0.8, cy*H(), r*0.7).fill(0xffffff);
+          bgGfx.circle(cx*W()-r*0.8, cy*H(), r*0.7).fill(0xffffff);
         }
       }
 
       function drawGround() {
         groundGfx.clear();
         const gy = gY();
-        groundGfx.rect(0, gy, W(), H() * 0.04).fill(0x5a8a30);
-        groundGfx.rect(0, gy + H() * 0.04, W(), H() - gy - H() * 0.04).fill(0x8b6914);
+        groundGfx.rect(0, gy, W(), H()*0.04).fill(0x5a8a30);
+        groundGfx.rect(0, gy+H()*0.04, W(), H()-gy-H()*0.04).fill(0x8b6914);
         for (let i = 0; i < 28; i++) {
-          const tx = (i / 28) * W();
-          groundGfx.rect(tx,     gy - 3, 3, 7).fill(0x3d7a1a);
-          groundGfx.rect(tx + 7, gy - 5, 2, 9).fill(0x3d7a1a);
+          const tx = (i/28)*W();
+          groundGfx.rect(tx, gy-3, 3, 7).fill(0x3d7a1a);
+          groundGfx.rect(tx+7, gy-5, 2, 9).fill(0x3d7a1a);
         }
       }
 
       function drawBirdShape(g: Graphics, bx: number, by: number, r: number, col: number) {
         g.circle(bx, by, r).fill(col);
         const s = r / BIRD_R;
-        g.circle(bx + 7 * s, by - 5 * s, 5 * s).fill(0xffffff);
-        g.circle(bx + 8 * s, by - 5 * s, 2.5 * s).fill(0x111111);
-        g.poly([bx + 12 * s, by - 2 * s, bx + 19 * s, by, bx + 12 * s, by + 3 * s]).fill(0xffa500);
-        g.poly([bx - 3 * s, by - r, bx, by - r - 8 * s, bx + 3 * s, by - r]).fill(col);
+        g.circle(bx+7*s, by-5*s, 5*s).fill(0xffffff);
+        g.circle(bx+8*s, by-5*s, 2.5*s).fill(0x111111);
+        g.poly([bx+12*s, by-2*s, bx+19*s, by, bx+12*s, by+3*s]).fill(0xffa500);
+        g.poly([bx-3*s, by-r, bx, by-r-8*s, bx+3*s, by-r]).fill(col);
       }
 
       function drawSling() {
         slingGfx.clear();
         const _gs = gsRef.current;
         if (!_gs) return;
-        const _sx = slX(), _sy = slY(), _gy = slBaseY();
-
-        // Vertical post
-        slingGfx.rect(_sx - 4, _sy + 10, 8, _gy - _sy - 10).fill(0x8b4513);
-
-        // Fork arms (Y-shape tips above pivot)
-        slingGfx.moveTo(_sx, _sy + 10)
-          .lineTo(_sx - 12, _sy - 18)
+        const _sx = slX(), _sy = slY(), _gy = gY();
+        // Vertical post from pivot down to ground
+        slingGfx.rect(_sx-4, _sy+10, 8, _gy-_sy-10).fill(0x8b4513);
+        // Y-fork arms
+        slingGfx.moveTo(_sx, _sy+10).lineTo(_sx-12, _sy-18)
           .stroke({ color: 0x8b4513, width: 8, cap: "round" });
-        slingGfx.moveTo(_sx, _sy + 10)
-          .lineTo(_sx + 12, _sy - 18)
+        slingGfx.moveTo(_sx, _sy+10).lineTo(_sx+12, _sy-18)
           .stroke({ color: 0x8b4513, width: 8, cap: "round" });
 
         if (_gs.phase !== "aim") return;
-
         const bx = _gs.dragging ? _gs.dragX : _sx;
         const by = _gs.dragging ? _gs.dragY : _sy;
 
-        // Rubber bands from fork tips to bird
-        slingGfx.moveTo(_sx - 12, _sy - 18).lineTo(bx, by)
+        // Rubber bands from fork tips to bird position
+        slingGfx.moveTo(_sx-12, _sy-18).lineTo(bx, by)
           .stroke({ color: 0x6b3a10, width: 3 });
-        slingGfx.moveTo(_sx + 12, _sy - 18).lineTo(bx, by)
+        slingGfx.moveTo(_sx+12, _sy-18).lineTo(bx, by)
           .stroke({ color: 0x6b3a10, width: 3 });
 
-        // Bird on sling
         if (_gs.bird) {
           const col = BIRD_COL[_gs.bird.birdType ?? "red"] ?? 0xe63946;
           drawBirdShape(slingGfx, bx, by, BIRD_R, col);
         }
-
-        // Queued birds sitting on the ground to the left
+        // Queued birds waiting on the left
         for (let i = 0; i < _gs.queue.length; i++) {
-          const bt  = _gs.queue[i]!;
+          const bt = _gs.queue[i]!;
           const col = BIRD_COL[bt] ?? 0xe63946;
-          drawBirdShape(slingGfx, _sx - 55 - i * 36, _gy - 12, 12, col);
+          drawBirdShape(slingGfx, _sx-55-i*36, _gy-12, 12, col);
         }
       }
 
@@ -443,16 +359,13 @@ export default function App() {
         const _gs = gsRef.current;
         if (!_gs || _gs.phase !== "aim" || !_gs.dragging) return;
         const _sx = slX(), _sy = slY();
-        const dvx = (_sx - _gs.dragX) * LAUNCH_POW;
-        const dvy = (_sy - _gs.dragY) * LAUNCH_POW;
+        const dvx = (_sx-_gs.dragX)*LAUNCH_POW, dvy = (_sy-_gs.dragY)*LAUNCH_POW;
         let tx = _sx, ty = _sy, tvx = dvx, tvy = dvy;
         const dt = 0.05;
         for (let i = 0; i < 28; i++) {
-          tvy += GRAVITY * dt;
-          tx  += tvx * dt;
-          ty  += tvy * dt;
+          tvy += GRAVITY*dt; tx += tvx*dt; ty += tvy*dt;
           if (ty > gY()) break;
-          trajGfx.circle(tx, ty, 3).fill({ color: 0xffffff, alpha: 1 - i / 28 });
+          trajGfx.circle(tx, ty, 3).fill({ color: 0xffffff, alpha: 1-i/28 });
         }
       }
 
@@ -460,43 +373,33 @@ export default function App() {
         bodyGfx.clear();
         const _gs = gsRef.current;
         if (!_gs) return;
-
         for (const b of _gs.bodies) {
           if (!b.alive) continue;
-
           if (b.kind === "block") {
             const col  = MAT_COL[b.mat ?? "wood"] ?? 0xc9a84c;
-            const dmgF = 1 - Math.max(0, b.hp / b.maxHp);
-            const r2   = Math.round(((col >> 16) & 0xff) * (1 - dmgF * 0.5));
-            const g2   = Math.round(((col >>  8) & 0xff) * (1 - dmgF * 0.5));
-            const bl2  = Math.round(( col        & 0xff) * (1 - dmgF * 0.5));
-            const fc   = (r2 << 16) | (g2 << 8) | bl2;
-            bodyGfx
-              .rect(b.x - b.w / 2, b.y - b.h / 2, b.w, b.h)
-              .fill(fc)
+            const dmgF = 1 - Math.max(0, b.hp/b.maxHp);
+            const r2 = Math.round(((col>>16)&0xff)*(1-dmgF*0.5));
+            const g2 = Math.round(((col>>8)&0xff)*(1-dmgF*0.5));
+            const bl2= Math.round((col&0xff)*(1-dmgF*0.5));
+            bodyGfx.rect(b.x-b.w/2, b.y-b.h/2, b.w, b.h)
+              .fill((r2<<16)|(g2<<8)|bl2)
               .stroke({ color: 0x000000, width: 1, alpha: 0.3 });
-
           } else if (b.kind === "pig") {
-            const hf  = b.hp / b.maxHp;
-            const col = hf > 0.5 ? 0x4caf50 : 0x2e7d32;
-            bodyGfx.circle(b.x, b.y, b.r).fill(col);
-            bodyGfx.circle(b.x - 5, b.y - 4, 3.5).fill(0xffffff);
-            bodyGfx.circle(b.x + 5, b.y - 4, 3.5).fill(0xffffff);
-            bodyGfx.circle(b.x - 5, b.y - 4, 1.8).fill(0x111111);
-            bodyGfx.circle(b.x + 5, b.y - 4, 1.8).fill(0x111111);
-            bodyGfx.ellipse(b.x, b.y + 3, 5, 3.5).fill(0x388e3c);
-            bodyGfx.circle(b.x - 2, b.y + 3, 1.2).fill(0x111111);
-            bodyGfx.circle(b.x + 2, b.y + 3, 1.2).fill(0x111111);
+            const hf = b.hp/b.maxHp;
+            bodyGfx.circle(b.x, b.y, b.r).fill(hf>0.5?0x4caf50:0x2e7d32);
+            bodyGfx.circle(b.x-5, b.y-4, 3.5).fill(0xffffff);
+            bodyGfx.circle(b.x+5, b.y-4, 3.5).fill(0xffffff);
+            bodyGfx.circle(b.x-5, b.y-4, 1.8).fill(0x111111);
+            bodyGfx.circle(b.x+5, b.y-4, 1.8).fill(0x111111);
+            bodyGfx.ellipse(b.x, b.y+3, 5, 3.5).fill(0x388e3c);
+            bodyGfx.circle(b.x-2, b.y+3, 1.2).fill(0x111111);
+            bodyGfx.circle(b.x+2, b.y+3, 1.2).fill(0x111111);
             if (hf < 0.7) {
-              bodyGfx.moveTo(b.x - 9, b.y - 8).lineTo(b.x - 3, b.y - 6)
-                .stroke({ color: 0x111111, width: 2 });
-              bodyGfx.moveTo(b.x + 3, b.y - 6).lineTo(b.x + 9, b.y - 8)
-                .stroke({ color: 0x111111, width: 2 });
+              bodyGfx.moveTo(b.x-9,b.y-8).lineTo(b.x-3,b.y-6).stroke({color:0x111111,width:2});
+              bodyGfx.moveTo(b.x+3,b.y-6).lineTo(b.x+9,b.y-8).stroke({color:0x111111,width:2});
             }
-
           } else if (b.kind === "bird") {
-            const col = BIRD_COL[b.birdType ?? "red"] ?? 0xe63946;
-            drawBirdShape(bodyGfx, b.x, b.y, b.r, col);
+            drawBirdShape(bodyGfx, b.x, b.y, b.r, BIRD_COL[b.birdType??"red"]??0xe63946);
           }
         }
       }
@@ -505,19 +408,17 @@ export default function App() {
         const _gs = gsRef.current;
         if (!_gs) return;
         scoreTxt.text = `Score: ${_gs.score}`;
-        levelTxt.text = `Level ${_gs.lvlIdx + 1}`;
+        levelTxt.text = `Level ${_gs.lvlIdx+1}`;
         hsTxt.text    = `Best: ${hs}`;
       }
 
       function drawOverlay() {
         const _gs = gsRef.current;
-        overlayGfx.clear();
-        overTxt.text = "";
-        subTxt.text  = "";
+        overlayGfx.clear(); overTxt.text = ""; subTxt.text = "";
         if (!_gs || (_gs.phase !== "won" && _gs.phase !== "lost")) return;
-        overlayGfx.rect(0, 0, W(), H()).fill({ color: 0x000000, alpha: 0.55 });
-        overTxt.position.set(W() / 2, H() / 2 - 28);
-        subTxt.position.set(W() / 2, H() / 2 + 18);
+        overlayGfx.rect(0,0,W(),H()).fill({ color: 0x000000, alpha: 0.55 });
+        overTxt.position.set(W()/2, H()/2-28);
+        subTxt.position.set(W()/2, H()/2+18);
         if (_gs.phase === "won") {
           overTxt.text = "🎉 Level Clear!";
           subTxt.text  = `Score: ${_gs.score}  —  Tap to continue`;
@@ -527,68 +428,51 @@ export default function App() {
         }
       }
 
-      // ── Input ────────────────────────────────────────────────────────
       app.stage.eventMode = "static";
       app.stage.hitArea   = app.screen;
 
       app.stage.on("pointerdown", (e) => {
         const _gs = gsRef.current;
         if (!_gs) return;
-
         if (_gs.phase === "won") {
-          gs = buildLevel(_gs.lvlIdx + 1, W(), H());
-          gsRef.current = gs;
-          drawBg(); drawGround();
-          return;
+          gs = buildLevel(_gs.lvlIdx+1, W(), H());
+          gsRef.current = gs; drawBg(); drawGround(); return;
         }
         if (_gs.phase === "lost") {
           gs = buildLevel(_gs.lvlIdx, W(), H());
-          gsRef.current = gs;
-          drawBg(); drawGround();
-          return;
+          gsRef.current = gs; drawBg(); drawGround(); return;
         }
         if (_gs.phase !== "aim" || !_gs.bird) return;
-
         const px = e.global.x, py = e.global.y;
-        const ddx = px - slX(), ddy = py - slY();
-        // Large touch target — 70px radius around pivot
-        if (Math.sqrt(ddx * ddx + ddy * ddy) < 70) {
+        const ddx = px-slX(), ddy = py-slY();
+        if (Math.sqrt(ddx*ddx+ddy*ddy) < 70) {
           _gs.dragging = true;
-          const clamped = clampDrag(px, py, slX(), slY(), gY());
-          _gs.dragX = clamped.x;
-          _gs.dragY = clamped.y;
+          const c = clampDrag(px, py, slX(), slY(), gY());
+          _gs.dragX = c.x; _gs.dragY = c.y;
         }
       });
 
       app.stage.on("pointermove", (e) => {
         const _gs = gsRef.current;
         if (!_gs || !_gs.dragging) return;
-        const clamped = clampDrag(e.global.x, e.global.y, slX(), slY(), gY());
-        _gs.dragX = clamped.x;
-        _gs.dragY = clamped.y;
+        const c = clampDrag(e.global.x, e.global.y, slX(), slY(), gY());
+        _gs.dragX = c.x; _gs.dragY = c.y;
       });
 
       app.stage.on("pointerup", () => {
         const _gs = gsRef.current;
         if (!_gs || !_gs.dragging || !_gs.bird) return;
         _gs.dragging = false;
-
-        const _sx  = slX(), _sy = slY();
-        const ddx  = _sx - _gs.dragX;
-        const ddy  = _sy - _gs.dragY;
-        const dist = Math.sqrt(ddx * ddx + ddy * ddy);
-        // Minimum drag of 10px to fire
+        const _sx = slX(), _sy = slY();
+        const ddx = _sx-_gs.dragX, ddy = _sy-_gs.dragY;
+        const dist = Math.sqrt(ddx*ddx+ddy*ddy);
         if (dist < 10) return;
-
         const b = _gs.bird;
-        b.x = _gs.dragX;
-        b.y = _gs.dragY;
-        b.vx = ddx * LAUNCH_POW;
-        b.vy = ddy * LAUNCH_POW;
+        b.x = _gs.dragX; b.y = _gs.dragY;
+        b.vx = ddx*LAUNCH_POW; b.vy = ddy*LAUNCH_POW;
         b.isStatic = false;
         _gs.bodies.push(b);
-        _gs.bird  = null;
-        _gs.phase = "flying";
+        _gs.bird = null; _gs.phase = "flying";
       });
 
       app.stage.on("pointerupoutside", () => {
@@ -596,13 +480,9 @@ export default function App() {
         if (_gs) _gs.dragging = false;
       });
 
-      // ── Initial draw ─────────────────────────────────────────────────
-      drawBg();
-      drawGround();
-
+      drawBg(); drawGround();
       let settleTimer = 0;
 
-      // ── Game loop ────────────────────────────────────────────────────
       app.ticker.add((ticker) => {
         const _gs = gsRef.current;
         if (!_gs) return;
@@ -616,8 +496,8 @@ export default function App() {
             if (!flyBird) {
               _gs.phase = "settling"; settleTimer = 2000;
             } else {
-              const spd = Math.sqrt(flyBird.vx ** 2 + flyBird.vy ** 2);
-              if (spd < 12 && flyBird.y >= gY() - flyBird.r - 4) {
+              const spd = Math.sqrt(flyBird.vx**2 + flyBird.vy**2);
+              if (spd < 12 && flyBird.y >= gY()-flyBird.r-4) {
                 _gs.phase = "settling"; settleTimer = 1500;
               }
             }
@@ -626,10 +506,10 @@ export default function App() {
           if (_gs.phase === "settling") {
             settleTimer -= dt;
             if (settleTimer <= 0) {
-              const pigsLeft = _gs.bodies.filter(b => b.kind === "pig" && b.alive).length;
+              const pigsLeft = _gs.bodies.filter(b => b.kind==="pig" && b.alive).length;
               if (pigsLeft === 0) {
-                const bonus = (_gs.queue.length + (_gs.bird ? 1 : 0)) * 2000;
-                _gs.score += bonus + 3000;
+                const bonus = (_gs.queue.length+(_gs.bird?1:0))*2000;
+                _gs.score += bonus+3000;
                 updateHighScore(_gs.score);
                 _gs.phase = "won";
               } else if (_gs.queue.length === 0 && !_gs.bird) {
@@ -637,14 +517,12 @@ export default function App() {
               } else {
                 const nextType = _gs.queue.shift();
                 if (nextType) {
-                  const nb = mkBody({
+                  _gs.bird = mkBody({
                     kind: "bird", x: slX(), y: slY(),
-                    r: BIRD_R, w: BIRD_R * 2, h: BIRD_R * 2,
+                    r: BIRD_R, w: BIRD_R*2, h: BIRD_R*2,
                     mass: 2, rest: 0.35, fric: 0.6,
-                    isStatic: true, hp: 999, maxHp: 999,
-                    birdType: nextType,
+                    isStatic: true, hp: 999, maxHp: 999, birdType: nextType,
                   });
-                  _gs.bird  = nb;
                   _gs.phase = "aim";
                   _gs.dragX = slX(); _gs.dragY = slY();
                 } else {
@@ -654,35 +532,25 @@ export default function App() {
             }
           }
 
-          // Score killed pigs (mark with -9999 to avoid double-counting)
           for (const b of _gs.bodies) {
-            if (b.kind === "pig" && !b.alive && b.hp > -9999) {
-              _gs.score += 5000;
-              b.hp = -9999;
+            if (b.kind==="pig" && !b.alive && b.hp>-9999) {
+              _gs.score += 5000; b.hp = -9999;
             }
           }
         }
 
-        drawBodies();
-        drawSling();
-        drawTrajectory();
-        drawHud(highScore);
-        drawOverlay();
+        drawBodies(); drawSling(); drawTrajectory();
+        drawHud(highScore); drawOverlay();
 
         setUiScore(_gs.score);
-        setUiLevel(_gs.lvlIdx + 1);
+        setUiLevel(_gs.lvlIdx+1);
         setUiPhase(_gs.phase);
-        setUiBirds([
-          ...(_gs.bird ? [_gs.bird.birdType ?? "red"] : []),
-          ..._gs.queue,
-        ]);
+        const birdList: BirdType[] = _gs.bird ? [_gs.bird.birdType ?? "red"] : [];
+        setUiBirds([...birdList, ..._gs.queue]);
       });
     })();
 
-    return () => {
-      dead = true;
-      app.destroy(true);
-    };
+    return () => { dead = true; app.destroy(true); };
   }, [buildLevel, highScore, updateHighScore]);
 
   const birdEmoji: Record<BirdType, string> = { red: "🔴", blue: "🔵", yellow: "🟡" };
@@ -693,9 +561,7 @@ export default function App() {
         <div className="flex flex-col gap-4 px-4 py-2">
           <div>
             <div className="text-xs uppercase tracking-widest mb-1"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
-              Score
-            </div>
+              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Score</div>
             <div className="text-3xl font-bold"
               style={{ fontFamily: "Fraunces,serif", color: "var(--fg)" }}>
               {uiScore.toLocaleString()}
@@ -706,9 +572,7 @@ export default function App() {
           </div>
           <div>
             <div className="text-xs uppercase tracking-widest mb-1"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
-              Level
-            </div>
+              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Level</div>
             <div className="text-2xl font-bold"
               style={{ fontFamily: "Fraunces,serif", color: "var(--fg)" }}>
               {uiLevel}
@@ -716,13 +580,9 @@ export default function App() {
           </div>
           <div>
             <div className="text-xs uppercase tracking-widest mb-2"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
-              Birds Left
-            </div>
+              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Birds Left</div>
             <div className="flex flex-wrap gap-1">
-              {uiBirds.map((b, i) => (
-                <span key={i} className="text-xl">{birdEmoji[b]}</span>
-              ))}
+              {uiBirds.map((b, i) => <span key={i} className="text-xl">{birdEmoji[b]}</span>)}
             </div>
           </div>
           <div className="text-xs mt-2" style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
@@ -740,12 +600,20 @@ export default function App() {
           <span>Lv {uiLevel}</span>
           <span style={{ color: "var(--muted)" }}>·</span>
           <span>{uiScore.toLocaleString()}</span>
-          <span style={{ color: "var(--muted)" }}>·</span>
-          <span>{uiBirds.map(b => birdEmoji[b]).join("")}</span>
         </div>
       }
     >
-      <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+      {/* overflow:hidden + position:relative keeps the canvas from ever expanding the page */}
+      <div
+        ref={containerRef}
+        style={{
+          position: "relative",
+          width: "100%",
+          height: "100%",
+          overflow: "hidden",
+          touchAction: "none",
+        }}
+      />
     </Shell>
   );
 }
