@@ -98,6 +98,8 @@ const LAUNCH_POW = 11;
 const MAX_DRAG   = 80;
 const BIRD_R     = 16;
 const PIG_R      = 14;
+// Minimum collision speed needed to "wake" a static body into dynamic
+const WAKE_SPEED = 20;
 
 let _nid = 1;
 function mkBody(p: Omit<Body, "id"|"vx"|"vy"|"alive">): Body {
@@ -106,12 +108,16 @@ function mkBody(p: Omit<Body, "id"|"vx"|"vy"|"alive">): Body {
 
 function step(bodies: Body[], groundY: number, dtMs: number) {
   const dt = Math.min(dtMs / 1000, 0.033);
+
+  // Integrate only dynamic bodies
   for (const b of bodies) {
     if (b.isStatic || !b.alive) continue;
     b.vy += GRAVITY * dt;
     b.x  += b.vx * dt;
     b.y  += b.vy * dt;
   }
+
+  // Ground collision for dynamic bodies
   for (const b of bodies) {
     if (b.isStatic || !b.alive) continue;
     const floor = groundY - b.r;
@@ -124,37 +130,70 @@ function step(bodies: Body[], groundY: number, dtMs: number) {
       if (spd > 30) b.hp -= spd * 0.1;
     }
   }
+
+  // Body-body collisions
   for (let i = 0; i < bodies.length; i++) {
     const a = bodies[i]!;
     if (!a.alive) continue;
     for (let j = i + 1; j < bodies.length; j++) {
       const b = bodies[j]!;
-      if (!b.alive || (a.isStatic && b.isStatic)) continue;
+      if (!b.alive) continue;
+      // Skip two fully-static bodies — they never move
+      if (a.isStatic && b.isStatic) continue;
+
       const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       const minD = a.r + b.r;
       if (dist >= minD || dist < 0.001) continue;
+
       const nx = dx / dist, ny = dy / dist, ov = minD - dist;
+
+      // Positional correction — only push dynamic bodies
       if (!a.isStatic && !b.isStatic) {
         a.x -= nx * ov * 0.5; a.y -= ny * ov * 0.5;
         b.x += nx * ov * 0.5; b.y += ny * ov * 0.5;
-      } else if (!a.isStatic) { a.x -= nx * ov; a.y -= ny * ov; }
-        else                  { b.x += nx * ov; b.y += ny * ov; }
+      } else if (!a.isStatic) {
+        a.x -= nx * ov; a.y -= ny * ov;
+      } else {
+        b.x += nx * ov; b.y += ny * ov;
+      }
+
+      // Relative velocity along normal
       const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
       const dot = rvx * nx + rvy * ny;
       if (dot >= 0) continue;
+
       const e   = Math.min(a.rest, b.rest);
-      const imp = (-(1 + e) * dot) / (1 / a.mass + 1 / b.mass);
       const spd = Math.sqrt(rvx * rvx + rvy * rvy);
       const dmg = Math.min(spd * 0.4, 60);
-      if (!a.isStatic) { a.vx -= (imp * nx) / a.mass; a.vy -= (imp * ny) / a.mass; }
-      if (!b.isStatic) { b.vx += (imp * nx) / b.mass; b.vy += (imp * ny) / b.mass; }
+
+      // Wake static bodies that get hit hard enough
+      if (a.isStatic && (b.kind === "bird" || spd > WAKE_SPEED)) {
+        a.isStatic = false;
+      }
+      if (b.isStatic && (a.kind === "bird" || spd > WAKE_SPEED)) {
+        b.isStatic = false;
+      }
+
+      // Impulse — now that bodies may have been woken, recalc
+      const massA = a.isStatic ? Infinity : a.mass;
+      const massB = b.isStatic ? Infinity : b.mass;
+      const invA  = massA === Infinity ? 0 : 1 / massA;
+      const invB  = massB === Infinity ? 0 : 1 / massB;
+      if (invA + invB === 0) continue;
+
+      const imp = (-(1 + e) * dot) / (invA + invB);
+
+      if (!a.isStatic) { a.vx -= imp * nx * invA; a.vy -= imp * ny * invA; }
+      if (!b.isStatic) { b.vx += imp * nx * invB; b.vy += imp * ny * invB; }
+
       if (dmg > 4) {
         if (!a.isStatic) a.hp -= dmg;
         if (!b.isStatic) b.hp -= dmg;
       }
     }
   }
+
   for (const b of bodies) if (b.hp <= 0) b.alive = false;
 }
 
@@ -197,13 +236,15 @@ export default function App() {
   const buildLevel = useCallback((lvlIdx: number, W: number, H: number): GS => {
     const def = LEVELS[lvlIdx % LEVELS.length]!;
     const bodies: Body[] = [];
+
+    // Blocks and pigs start STATIC — they only wake up on impact
     for (const bl of def.blocks) {
       const bw = bl.bw * W, bh = bl.bh * H;
       bodies.push(mkBody({
         kind: "block", x: bl.cx * W, y: bl.cy * H,
         r: Math.min(bw, bh) / 2, w: bw, h: bh,
         mass: bw * bh * 0.004, rest: 0.15, fric: 0.75,
-        isStatic: false, hp: MAT_HP[bl.mat], maxHp: MAT_HP[bl.mat], mat: bl.mat,
+        isStatic: true, hp: MAT_HP[bl.mat], maxHp: MAT_HP[bl.mat], mat: bl.mat,
       }));
     }
     for (const pg of def.pigs) {
@@ -211,9 +252,10 @@ export default function App() {
         kind: "pig", x: pg.cx * W, y: pg.cy * H,
         r: PIG_R, w: PIG_R * 2, h: PIG_R * 2,
         mass: 3, rest: 0.3, fric: 0.7,
-        isStatic: false, hp: 60, maxHp: 60,
+        isStatic: true, hp: 60, maxHp: 60,
       }));
     }
+
     const queue = [...def.birds];
     const firstType = queue.shift()!;
     const _sx = W * 0.18, _sy = H * 0.65;
@@ -247,9 +289,9 @@ export default function App() {
 
       const W   = () => app.screen.width;
       const H   = () => app.screen.height;
-      const gY  = () => H() * 0.82;   // ground line
-      const slX = () => W() * 0.18;   // sling x
-      const slY = () => H() * 0.65;   // sling pivot y (raised well above ground)
+      const gY  = () => H() * 0.82;
+      const slX = () => W() * 0.18;
+      const slY = () => H() * 0.65;
 
       const bgGfx = new Graphics(), groundGfx = new Graphics(),
             bodyGfx = new Graphics(), slingGfx = new Graphics(),
@@ -324,9 +366,7 @@ export default function App() {
         const _gs = gsRef.current;
         if (!_gs) return;
         const _sx = slX(), _sy = slY(), _gy = gY();
-        // Vertical post from pivot down to ground
         slingGfx.rect(_sx-4, _sy+10, 8, _gy-_sy-10).fill(0x8b4513);
-        // Y-fork arms
         slingGfx.moveTo(_sx, _sy+10).lineTo(_sx-12, _sy-18)
           .stroke({ color: 0x8b4513, width: 8, cap: "round" });
         slingGfx.moveTo(_sx, _sy+10).lineTo(_sx+12, _sy-18)
@@ -336,7 +376,6 @@ export default function App() {
         const bx = _gs.dragging ? _gs.dragX : _sx;
         const by = _gs.dragging ? _gs.dragY : _sy;
 
-        // Rubber bands from fork tips to bird position
         slingGfx.moveTo(_sx-12, _sy-18).lineTo(bx, by)
           .stroke({ color: 0x6b3a10, width: 3 });
         slingGfx.moveTo(_sx+12, _sy-18).lineTo(bx, by)
@@ -346,7 +385,6 @@ export default function App() {
           const col = BIRD_COL[_gs.bird.birdType ?? "red"] ?? 0xe63946;
           drawBirdShape(slingGfx, bx, by, BIRD_R, col);
         }
-        // Queued birds waiting on the left
         for (let i = 0; i < _gs.queue.length; i++) {
           const bt = _gs.queue[i]!;
           const col = BIRD_COL[bt] ?? 0xe63946;
@@ -470,7 +508,7 @@ export default function App() {
         const b = _gs.bird;
         b.x = _gs.dragX; b.y = _gs.dragY;
         b.vx = ddx*LAUNCH_POW; b.vy = ddy*LAUNCH_POW;
-        b.isStatic = false;
+        b.isStatic = false;   // bird becomes dynamic on launch
         _gs.bodies.push(b);
         _gs.bird = null; _gs.phase = "flying";
       });
@@ -603,7 +641,6 @@ export default function App() {
         </div>
       }
     >
-      {/* overflow:hidden + position:relative keeps the canvas from ever expanding the page */}
       <div
         ref={containerRef}
         style={{
