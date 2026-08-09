@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Application, Graphics, Text, TextStyle } from "pixi.js";
 import { Shell } from "./components/Shell";
 import { useHighScore } from "./hooks/useHighScore";
@@ -227,10 +227,6 @@ interface GS {
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [highScore, updateHighScore] = useHighScore("ab3_hs");
-  const [uiScore, setUiScore] = useState(0);
-  const [uiLevel, setUiLevel] = useState(1);
-  const [uiPhase, setUiPhase] = useState<Phase>("aim");
-  const [uiBirds, setUiBirds] = useState<BirdType[]>([]);
   const gsRef = useRef<GS | null>(null);
 
   const buildLevel = useCallback((lvlIdx: number, W: number, H: number): GS => {
@@ -579,68 +575,14 @@ export default function App() {
 
         drawBodies(); drawSling(); drawTrajectory();
         drawHud(highScore); drawOverlay();
-
-        setUiScore(_gs.score);
-        setUiLevel(_gs.lvlIdx+1);
-        setUiPhase(_gs.phase);
-        const birdList: BirdType[] = _gs.bird ? [_gs.bird.birdType ?? "red"] : [];
-        setUiBirds([...birdList, ..._gs.queue]);
       });
     })();
 
     return () => { dead = true; app.destroy(true); };
   }, [buildLevel, highScore, updateHighScore]);
 
-  const birdEmoji: Record<BirdType, string> = { red: "🔴", blue: "🔵", yellow: "🟡" };
-
   return (
-    <Shell
-      sidebar={
-        <div className="flex flex-col gap-4 px-4 py-2">
-          <div>
-            <div className="text-xs uppercase tracking-widest mb-1"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Score</div>
-            <div className="text-3xl font-bold"
-              style={{ fontFamily: "Fraunces,serif", color: "var(--fg)" }}>
-              {uiScore.toLocaleString()}
-            </div>
-            <div className="text-sm mt-1" style={{ color: "var(--muted)" }}>
-              Best: {highScore.toLocaleString()}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-widest mb-1"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Level</div>
-            <div className="text-2xl font-bold"
-              style={{ fontFamily: "Fraunces,serif", color: "var(--fg)" }}>
-              {uiLevel}
-            </div>
-          </div>
-          <div>
-            <div className="text-xs uppercase tracking-widest mb-2"
-              style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>Birds Left</div>
-            <div className="flex flex-wrap gap-1">
-              {uiBirds.map((b, i) => <span key={i} className="text-xl">{birdEmoji[b]}</span>)}
-            </div>
-          </div>
-          <div className="text-xs mt-2" style={{ color: "var(--muted)", fontFamily: "Manrope,sans-serif" }}>
-            {uiPhase === "aim"      && "Drag the bird to aim, release to fire!"}
-            {uiPhase === "flying"   && "Bird in flight…"}
-            {uiPhase === "settling" && "Settling…"}
-            {uiPhase === "won"      && "🎉 Level complete!"}
-            {uiPhase === "lost"     && "💥 Out of birds!"}
-          </div>
-        </div>
-      }
-      dock={
-        <div className="flex items-center gap-2 text-sm"
-          style={{ fontFamily: "Manrope,sans-serif", color: "var(--fg)" }}>
-          <span>Lv {uiLevel}</span>
-          <span style={{ color: "var(--muted)" }}>·</span>
-          <span>{uiScore.toLocaleString()}</span>
-        </div>
-      }
-    >
+    <Shell>
       <div
         ref={containerRef}
         style={{
