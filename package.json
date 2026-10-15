@@ -8,6 +8,7 @@
     "dev": "pnpm --filter @angry-birds3/web dev",
     "build": "pnpm --filter @angry-birds3/web build",
     "preview": "pnpm --filter @angry-birds3/web preview",
-    "typecheck": "pnpm --filter @angry-birds3/web exec tsc -b"
+    "typecheck": "pnpm --filter @angry-birds3/web exec tsc -b",
+    "test": "pnpm --filter @angry-birds3/web test"
   }
 }

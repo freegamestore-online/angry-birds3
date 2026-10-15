@@ -4,12 +4,12 @@ import { Shell } from "./components/Shell";
 import { useHighScore } from "./hooks/useHighScore";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-type BirdType = "red" | "blue" | "yellow";
+type BirdType = "coral" | "teal" | "violet";
 type Phase = "aim" | "flying" | "settling" | "won" | "lost";
 
 interface Body {
   id: number;
-  kind: "bird" | "pig" | "block";
+  kind: "bird" | "target" | "block";
   x: number; y: number;
   vx: number; vy: number;
   r: number;
@@ -26,7 +26,7 @@ interface Body {
 
 // ─── Colours ─────────────────────────────────────────────────────────────────
 const BIRD_COL: Record<BirdType, number> = {
-  red: 0xe63946, blue: 0x457b9d, yellow: 0xffd60a,
+  coral: 0xff7a5c, teal: 0x2a9d8f, violet: 0x8e6cc8,
 };
 const MAT_COL = { wood: 0xc9a84c, stone: 0x909090, glass: 0xa8d8ea };
 const MAT_HP  = { wood: 70, stone: 200, glass: 30 };
@@ -35,36 +35,36 @@ const MAT_HP  = { wood: 70, stone: 200, glass: 30 };
 interface LevelDef {
   birds: BirdType[];
   blocks: { cx: number; cy: number; bw: number; bh: number; mat: "wood"|"stone"|"glass" }[];
-  pigs:  { cx: number; cy: number }[];
+  targets:  { cx: number; cy: number }[];
 }
 
 const LEVELS: LevelDef[] = [
   {
-    birds: ["red", "red"],
+    birds: ["coral", "coral"],
     blocks: [{ cx: 0.68, cy: 0.72, bw: 0.04, bh: 0.14, mat: "wood" }],
-    pigs:  [{ cx: 0.75, cy: 0.76 }],
+    targets:  [{ cx: 0.75, cy: 0.76 }],
   },
   {
-    birds: ["red", "red", "blue"],
+    birds: ["coral", "coral", "teal"],
     blocks: [
       { cx: 0.63, cy: 0.72, bw: 0.04, bh: 0.14, mat: "wood" },
       { cx: 0.63, cy: 0.57, bw: 0.04, bh: 0.04, mat: "wood" },
       { cx: 0.75, cy: 0.72, bw: 0.04, bh: 0.14, mat: "wood" },
       { cx: 0.75, cy: 0.57, bw: 0.04, bh: 0.04, mat: "wood" },
     ],
-    pigs: [{ cx: 0.63, cy: 0.52 }, { cx: 0.75, cy: 0.52 }],
+    targets: [{ cx: 0.63, cy: 0.52 }, { cx: 0.75, cy: 0.52 }],
   },
   {
-    birds: ["red", "yellow", "red"],
+    birds: ["coral", "violet", "coral"],
     blocks: [
       { cx: 0.60, cy: 0.70, bw: 0.035, bh: 0.18, mat: "stone" },
       { cx: 0.76, cy: 0.70, bw: 0.035, bh: 0.18, mat: "stone" },
       { cx: 0.68, cy: 0.60, bw: 0.20,  bh: 0.035, mat: "stone" },
     ],
-    pigs: [{ cx: 0.68, cy: 0.76 }],
+    targets: [{ cx: 0.68, cy: 0.76 }],
   },
   {
-    birds: ["yellow", "blue", "red", "red"],
+    birds: ["violet", "teal", "coral", "coral"],
     blocks: [
       { cx: 0.60, cy: 0.72, bw: 0.035, bh: 0.14, mat: "glass" },
       { cx: 0.68, cy: 0.72, bw: 0.035, bh: 0.14, mat: "glass" },
@@ -72,10 +72,10 @@ const LEVELS: LevelDef[] = [
       { cx: 0.68, cy: 0.61, bw: 0.20,  bh: 0.035, mat: "glass" },
       { cx: 0.68, cy: 0.55, bw: 0.035, bh: 0.09,  mat: "glass" },
     ],
-    pigs: [{ cx: 0.60, cy: 0.76 }, { cx: 0.76, cy: 0.76 }, { cx: 0.68, cy: 0.50 }],
+    targets: [{ cx: 0.60, cy: 0.76 }, { cx: 0.76, cy: 0.76 }, { cx: 0.68, cy: 0.50 }],
   },
   {
-    birds: ["red", "yellow", "blue", "yellow", "red"],
+    birds: ["coral", "violet", "teal", "violet", "coral"],
     blocks: [
       { cx: 0.57, cy: 0.72, bw: 0.035, bh: 0.14, mat: "stone" },
       { cx: 0.66, cy: 0.72, bw: 0.035, bh: 0.14, mat: "wood"  },
@@ -85,7 +85,7 @@ const LEVELS: LevelDef[] = [
       { cx: 0.71, cy: 0.55, bw: 0.035, bh: 0.09,  mat: "glass" },
       { cx: 0.66, cy: 0.48, bw: 0.13,  bh: 0.035, mat: "stone" },
     ],
-    pigs: [
+    targets: [
       { cx: 0.57, cy: 0.76 }, { cx: 0.75, cy: 0.76 },
       { cx: 0.61, cy: 0.50 }, { cx: 0.71, cy: 0.50 },
     ],
@@ -97,7 +97,7 @@ const GRAVITY    = 1100;
 const LAUNCH_POW = 11;
 const MAX_DRAG   = 80;
 const BIRD_R     = 16;
-const PIG_R      = 14;
+const TARGET_R      = 14;
 // Minimum collision speed needed to "wake" a static body into dynamic
 const WAKE_SPEED = 20;
 
@@ -233,7 +233,7 @@ export default function App() {
     const def = LEVELS[lvlIdx % LEVELS.length]!;
     const bodies: Body[] = [];
 
-    // Blocks and pigs start STATIC — they only wake up on impact
+    // Blocks and targets start STATIC — they only wake up on impact
     for (const bl of def.blocks) {
       const bw = bl.bw * W, bh = bl.bh * H;
       bodies.push(mkBody({
@@ -243,10 +243,10 @@ export default function App() {
         isStatic: true, hp: MAT_HP[bl.mat], maxHp: MAT_HP[bl.mat], mat: bl.mat,
       }));
     }
-    for (const pg of def.pigs) {
+    for (const tg of def.targets) {
       bodies.push(mkBody({
-        kind: "pig", x: pg.cx * W, y: pg.cy * H,
-        r: PIG_R, w: PIG_R * 2, h: PIG_R * 2,
+        kind: "target", x: tg.cx * W, y: tg.cy * H,
+        r: TARGET_R, w: TARGET_R * 2, h: TARGET_R * 2,
         mass: 3, rest: 0.3, fric: 0.7,
         isStatic: true, hp: 60, maxHp: 60,
       }));
@@ -349,12 +349,12 @@ export default function App() {
       }
 
       function drawBirdShape(g: Graphics, bx: number, by: number, r: number, col: number) {
-        g.circle(bx, by, r).fill(col);
+        // Plain round bird: one eye, a small beak, no brows or crest
         const s = r / BIRD_R;
-        g.circle(bx+7*s, by-5*s, 5*s).fill(0xffffff);
-        g.circle(bx+8*s, by-5*s, 2.5*s).fill(0x111111);
-        g.poly([bx+12*s, by-2*s, bx+19*s, by, bx+12*s, by+3*s]).fill(0xffa500);
-        g.poly([bx-3*s, by-r, bx, by-r-8*s, bx+3*s, by-r]).fill(col);
+        g.circle(bx, by, r).fill(col);
+        g.circle(bx+7*s, by-4*s, 4*s).fill(0xffffff);
+        g.circle(bx+8*s, by-4*s, 2*s).fill(0x111111);
+        g.poly([bx+12*s, by-2*s, bx+19*s, by, bx+12*s, by+3*s]).fill(0xffb703);
       }
 
       function drawSling() {
@@ -378,12 +378,12 @@ export default function App() {
           .stroke({ color: 0x6b3a10, width: 3 });
 
         if (_gs.bird) {
-          const col = BIRD_COL[_gs.bird.birdType ?? "red"] ?? 0xe63946;
+          const col = BIRD_COL[_gs.bird.birdType ?? "coral"] ?? 0xff7a5c;
           drawBirdShape(slingGfx, bx, by, BIRD_R, col);
         }
         for (let i = 0; i < _gs.queue.length; i++) {
           const bt = _gs.queue[i]!;
-          const col = BIRD_COL[bt] ?? 0xe63946;
+          const col = BIRD_COL[bt] ?? 0xff7a5c;
           drawBirdShape(slingGfx, _sx-55-i*36, _gy-12, 12, col);
         }
       }
@@ -418,22 +418,14 @@ export default function App() {
             bodyGfx.rect(b.x-b.w/2, b.y-b.h/2, b.w, b.h)
               .fill((r2<<16)|(g2<<8)|bl2)
               .stroke({ color: 0x000000, width: 1, alpha: 0.3 });
-          } else if (b.kind === "pig") {
+          } else if (b.kind === "target") {
+            // Bullseye target: gold while intact, grey once it has taken heavy damage
             const hf = b.hp/b.maxHp;
-            bodyGfx.circle(b.x, b.y, b.r).fill(hf>0.5?0x4caf50:0x2e7d32);
-            bodyGfx.circle(b.x-5, b.y-4, 3.5).fill(0xffffff);
-            bodyGfx.circle(b.x+5, b.y-4, 3.5).fill(0xffffff);
-            bodyGfx.circle(b.x-5, b.y-4, 1.8).fill(0x111111);
-            bodyGfx.circle(b.x+5, b.y-4, 1.8).fill(0x111111);
-            bodyGfx.ellipse(b.x, b.y+3, 5, 3.5).fill(0x388e3c);
-            bodyGfx.circle(b.x-2, b.y+3, 1.2).fill(0x111111);
-            bodyGfx.circle(b.x+2, b.y+3, 1.2).fill(0x111111);
-            if (hf < 0.7) {
-              bodyGfx.moveTo(b.x-9,b.y-8).lineTo(b.x-3,b.y-6).stroke({color:0x111111,width:2});
-              bodyGfx.moveTo(b.x+3,b.y-6).lineTo(b.x+9,b.y-8).stroke({color:0x111111,width:2});
-            }
+            bodyGfx.circle(b.x, b.y, b.r).fill(hf>0.7?0xe9c46a:0x9aa5ab);
+            bodyGfx.circle(b.x, b.y, b.r*0.6).fill(0xf8f9fa);
+            bodyGfx.circle(b.x, b.y, b.r*0.25).fill(0x264653);
           } else if (b.kind === "bird") {
-            drawBirdShape(bodyGfx, b.x, b.y, b.r, BIRD_COL[b.birdType??"red"]??0xe63946);
+            drawBirdShape(bodyGfx, b.x, b.y, b.r, BIRD_COL[b.birdType??"coral"]??0xff7a5c);
           }
         }
       }
@@ -540,8 +532,8 @@ export default function App() {
           if (_gs.phase === "settling") {
             settleTimer -= dt;
             if (settleTimer <= 0) {
-              const pigsLeft = _gs.bodies.filter(b => b.kind==="pig" && b.alive).length;
-              if (pigsLeft === 0) {
+              const targetsLeft = _gs.bodies.filter(b => b.kind==="target" && b.alive).length;
+              if (targetsLeft === 0) {
                 const bonus = (_gs.queue.length+(_gs.bird?1:0))*2000;
                 _gs.score += bonus+3000;
                 updateHighScore(_gs.score);
@@ -567,7 +559,7 @@ export default function App() {
           }
 
           for (const b of _gs.bodies) {
-            if (b.kind==="pig" && !b.alive && b.hp>-9999) {
+            if (b.kind==="target" && !b.alive && b.hp>-9999) {
               _gs.score += 5000; b.hp = -9999;
             }
           }

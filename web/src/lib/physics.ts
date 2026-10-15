@@ -1,4 +1,4 @@
-// Simple 2D physics engine for Angry Birds clone
+// Simple 2D physics engine for Bird Launcher
 
 export interface Vec2 {
   x: number;
