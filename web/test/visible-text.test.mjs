@@ -19,7 +19,7 @@ function listSources(dir) {
 
 const visibleFiles = [
   join(webRoot, "index.html"),
-  join(webRoot, "public", "manifest.json"),
+  join(webRoot, "vite.config.ts"),
   ...listSources(join(webRoot, "src")),
 ];
 
@@ -36,7 +36,8 @@ test("page title and manifest use the new name", () => {
   const html = readFileSync(join(webRoot, "index.html"), "utf8");
   assert.match(html, /<title>Bird Launcher — FreeGameStore<\/title>/);
 
-  const manifest = JSON.parse(readFileSync(join(webRoot, "public", "manifest.json"), "utf8"));
-  assert.equal(manifest.name, "Bird Launcher");
-  assert.equal(manifest.short_name, "Bird Launcher");
+  // The install manifest is declared in vite.config.ts (VitePWA).
+  const config = readFileSync(join(webRoot, "vite.config.ts"), "utf8");
+  assert.match(config, /name: "Bird Launcher"/);
+  assert.match(config, /short_name: "Bird Launcher"/);
 });
